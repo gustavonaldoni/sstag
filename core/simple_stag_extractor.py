@@ -1,0 +1,2 @@
+class SimpleStagExtractor:
+    pass
