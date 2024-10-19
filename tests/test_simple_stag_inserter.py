@@ -1,112 +1,128 @@
-import os
 import pytest
-import shutil
 from unittest.mock import patch, mock_open
-from core.simple_stag_inserter import SimpleStagInserter
+from core.simple_stag_inserter import (
+    FileAppender,
+    FileCopier,
+    FilePathHelper,
+    SimpleStagInserter,
+)
 
 
-# Configuração antes de cada teste
-@pytest.fixture
-def setup_files(tmpdir):
-    src_file = tmpdir.join("source.txt")
-    dst_file = tmpdir.join("destination.txt")
-    
-    src_file.write("Conteudo de teste para arquivo de origem.")
-    dst_file.write("Conteudo de teste para arquivo de destino.")
-    
-    return str(src_file), str(dst_file)
+# Testes para FileCopier
+@patch("shutil.copyfile")
+@patch("FilePathHelper.get_copy_file_path", return_value="test_file Copy.txt")
+def test_file_copier_success(mock_get_copy_file_path, mock_copyfile):
+    file_path = "test_file.txt"
+    result = FileCopier.copy_file(file_path)
+
+    mock_copyfile.assert_called_once_with(file_path, "test_file Copy.txt")
+    assert result == "test_file Copy.txt"
 
 
-# Teste: inserção de arquivo bem-sucedida
-def test_insert_file_at_the_end_success(setup_files):
-    src_file, dst_file = setup_files
+@patch("shutil.copyfile", side_effect=IOError("Erro de IO"))
+@patch("FilePathHelper.get_copy_file_path", return_value="test_file Copy.txt")
+def test_file_copier_io_error(mock_get_copy_file_path, mock_copyfile):
+    file_path = "test_file.txt"
+
+    with pytest.raises(
+        RuntimeError, match="Erro de IO ao copiar o arquivo: Erro de IO"
+    ):
+        FileCopier.copy_file(file_path)
+
+
+@patch("shutil.copyfile", side_effect=Exception("Erro inesperado"))
+@patch("FilePathHelper.get_copy_file_path", return_value="test_file Copy.txt")
+def test_file_copier_unexpected_error(mock_get_copy_file_path, mock_copyfile):
+    file_path = "test_file.txt"
+
+    with pytest.raises(
+        RuntimeError, match="Erro inesperado ao copiar o arquivo: Erro inesperado"
+    ):
+        FileCopier.copy_file(file_path)
+
+
+# Testes para FileAppender
+@patch("builtins.open", new_callable=mock_open)
+def test_file_appender_success(mock_open):
+    src_path = "source.txt"
+    dst_path = "destination.txt"
+
+    FileAppender.append_file(src_path, dst_path)
+
+    mock_open.assert_any_call(src_path, "rb")
+    mock_open.assert_any_call(dst_path, "ab")
+    assert mock_open().write.called
+
+
+@patch("builtins.open", side_effect=IOError("Erro de IO"))
+def test_file_appender_io_error(mock_open):
+    src_path = "source.txt"
+    dst_path = "destination.txt"
+
+    with pytest.raises(
+        RuntimeError, match="Erro de IO ao manipular algum arquivo: Erro de IO"
+    ):
+        FileAppender.append_file(src_path, dst_path)
+
+
+@patch("builtins.open", side_effect=Exception("Erro inesperado"))
+def test_file_appender_unexpected_error(mock_open):
+    src_path = "source.txt"
+    dst_path = "destination.txt"
+
+    with pytest.raises(
+        RuntimeError, match="Erro inesperado durante a esteganografia: Erro inesperado"
+    ):
+        FileAppender.append_file(src_path, dst_path)
+
+
+# Testes para FilePathHelper
+@patch("handlers.file_handler.FileHandler.get_extension", return_value="txt")
+def test_file_path_helper_success(mock_get_extension):
+    file_path = "test_file.txt"
+    result = FilePathHelper.get_copy_file_path(file_path)
+
+    assert result == "test_file.txt Copy.txt"
+    mock_get_extension.assert_called_once_with(file_path)
+
+
+# Testes para SimpleStagInserter
+@patch("FileHandler.validate_file_path")
+@patch("FileCopier.copy_file", return_value="test_file Copy.txt")
+@patch("FileAppender.append_file")
+def test_simple_stag_inserter_success(
+    mock_append_file, mock_copy_file, mock_validate_file_path
+):
     inserter = SimpleStagInserter()
+    src_path = "source.txt"
+    dst_path = "destination.txt"
 
-    inserter.insert_file_at_the_end(src_file, dst_file)
+    inserter.insert_file_at_the_end(src_path, dst_path)
 
-    copy_file_path = f"{dst_file} Copy.txt"
-    assert os.path.exists(copy_file_path)
-    
-    with open(copy_file_path, "rb") as f:
-        data = f.read()
-        assert b"Conteudo de teste para arquivo de origem." in data
-        assert b"Conteudo de teste para arquivo de destino." in data
+    mock_validate_file_path.assert_any_call(src_path)
+    mock_validate_file_path.assert_any_call(dst_path)
+    mock_copy_file.assert_called_once_with(dst_path)
+    mock_append_file.assert_called_once_with(src_path, "test_file Copy.txt")
 
 
-# Teste: falha ao inserir quando arquivo de origem não existe
-def test_insert_file_at_the_end_src_file_not_found(tmpdir):
+@patch("FileHandler.validate_file_path")
+@patch(
+    "FileCopier.copy_file", side_effect=RuntimeError("Erro de IO ao copiar o arquivo")
+)
+def test_simple_stag_inserter_copy_file_error(mock_copy_file, mock_validate_file_path):
     inserter = SimpleStagInserter()
-    non_existent_file = tmpdir.join("missing.txt")
-    dst_file = tmpdir.join("destination.txt")
-    dst_file.write("Conteúdo de teste")
+    src_path = "source.txt"
+    dst_path = "destination.txt"
 
-    with pytest.raises(FileNotFoundError):
-        inserter.insert_file_at_the_end(str(non_existent_file), str(dst_file))
+    with pytest.raises(RuntimeError, match="Erro de IO ao copiar o arquivo"):
+        inserter.insert_file_at_the_end(src_path, dst_path)
 
 
-# Teste: falha ao inserir quando arquivo de destino não existe
-def test_insert_file_at_the_end_dst_file_not_found(tmpdir):
+@patch("FileHandler.validate_file_path", side_effect=ValueError("Caminho inválido"))
+def test_simple_stag_inserter_invalid_file_path(mock_validate_file_path):
     inserter = SimpleStagInserter()
-    src_file = tmpdir.join("source.txt")
-    src_file.write("Conteúdo de teste para arquivo de origem.")
-    non_existent_file = tmpdir.join("missing.txt")
+    src_path = "source.txt"
+    dst_path = "destination.txt"
 
-    with pytest.raises(FileNotFoundError):
-        inserter.insert_file_at_the_end(str(src_file), str(non_existent_file))
-
-
-# Teste: falha quando caminho de arquivo não é um arquivo
-def test_validate_file_path_not_a_file(tmpdir):
-    inserter = SimpleStagInserter()
-    directory_path = tmpdir.mkdir("not_a_file")
-
-    with pytest.raises(ValueError, match="Caminho informado não se refere a um arquivo"):
-        inserter._validate_file_path(str(directory_path))
-
-
-# Teste: erro de IO durante a cópia do arquivo
-def test_copy_file_io_error(setup_files):
-    src_file, dst_file = setup_files
-    inserter = SimpleStagInserter()
-
-    with patch("shutil.copyfile", side_effect=IOError("Erro de IO")):
-        with pytest.raises(RuntimeError, match="Erro de IO ao copiar o arquivo"):
-            inserter._copy_file(dst_file)
-
-
-# Teste: arquivo sem extensão
-def test_get_extension_no_extension(tmpdir):
-    inserter = SimpleStagInserter()
-    file_no_extension = tmpdir.join("no_extension_file")
-    file_no_extension.write("Sem extensão")
-
-    with pytest.raises(ValueError, match="Arquivo sem extensão"):
-        inserter._get_extension(str(file_no_extension))
-
-
-# Teste: obtenção do caminho de cópia correto
-def test_get_copy_file_path(setup_files):
-    src_file, dst_file = setup_files
-    inserter = SimpleStagInserter()
-
-    expected_copy_path = f"{dst_file} Copy.txt"
-    assert inserter._get_copy_file_path(dst_file) == expected_copy_path
-
-
-# Teste: inserção de arquivo com exceção inesperada
-def test_insert_file_unexpected_error(setup_files):
-    src_file, dst_file = setup_files
-    inserter = SimpleStagInserter()
-
-    with patch("builtins.open", side_effect=Exception("Erro inesperado")):
-        with pytest.raises(RuntimeError, match="Erro inesperado"):
-            inserter.insert_file_at_the_end(src_file, dst_file)
-
-
-# Teste: falha ao validar arquivo inexistente
-def test_validate_file_path_file_not_found():
-    inserter = SimpleStagInserter()
-
-    with pytest.raises(FileNotFoundError, match="Arquivo não existe: arquivo_inexistente.txt"):
-        inserter._validate_file_path("arquivo_inexistente.txt")
-
+    with pytest.raises(ValueError, match="Caminho inválido"):
+        inserter.insert_file_at_the_end(src_path, dst_path)

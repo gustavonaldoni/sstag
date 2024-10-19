@@ -1,0 +1,3 @@
+Examples:
+    sstag.py -s file.png -d file.pdf                    # Append the source file into the destination file, resulting on file_copy.pdf (default)
+    sstag.py -e file.pdf                                # Extract a file appendend to file.pdf
